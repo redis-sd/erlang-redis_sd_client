@@ -99,7 +99,7 @@ read(timeout, Browse) ->
 			case redis_keyvals(Keys, Browse) of
 				{ok, KeyVals} ->
 					% redis_sd_client_event:browse_sync(Vals, Browse),
-					ok = redis_sd_client_reader:read(Browse, KeyVals),
+					ok = redis_sd_client_browse:parse(Browse, KeyVals),
 					% ok = gen_server:cast(Browse#browse.reader, {sync, KeyVals}),
 					{stop, normal, Browse};
 				{error, ValReason} ->
@@ -131,12 +131,17 @@ redis_auth(Password, #browse{redis_cli=Client, cmd_auth=AUTH}) ->
 	end.
 
 %% @private
-redis_keys(#browse{redis_cli=Client, redis_ns=Namespace, glob=Pattern, cmd_keys=KEYS}) ->
-	Keys = [Namespace, "PTR:", Pattern],
-	Command = [KEYS, Keys],
-	try hierdis_async:command(Client, Command) of
-		{ok, Result} ->
-			{ok, Result};
+redis_keys(#browse{redis_cli=Client, channels=Channels, cmd_keys=KEYS}) ->
+	Transaction = [[KEYS, Channel] || Channel <- Channels],
+	try hierdis_async:transaction(Client, Transaction) of
+		{ok, [Keys]} ->
+			{ok, Keys};
+		{ok, [[], Keys]} ->
+			{ok, Keys};
+		{ok, [Keys, []]} ->
+			{ok, Keys};
+		{ok, [KeysA, KeysB]} ->
+			{ok, gb_sets:to_list(gb_sets:union(gb_sets:from_list(KeysA), gb_sets:from_list(KeysB)))};
 		{error, Reason} ->
 			{error, Reason}
 	catch

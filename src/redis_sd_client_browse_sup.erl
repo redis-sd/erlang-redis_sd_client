@@ -14,7 +14,7 @@
 -include("redis_sd_client.hrl").
 
 %% API
--export([start_link/1, start_sync/1, browse_sup_name/1, reader_name/1, graceful_shutdown/1]).
+-export([start_link/1, start_sync/1, browse_sup_name/1, browse_reader_name/1, graceful_shutdown/1]).
 
 %% Supervisor callbacks
 -export([init/1]).
@@ -38,8 +38,8 @@ start_sync(Browse=#browse{}) ->
 browse_sup_name(#browse{name=Name}) ->
 	list_to_atom("redis_sd_client_" ++ atom_to_list(Name) ++ "_browse_sup").
 
-reader_name(#browse{name=Name}) ->
-	list_to_atom("redis_sd_client_" ++ atom_to_list(Name) ++ "_reader").
+browse_reader_name(#browse{name=Name}) ->
+	list_to_atom("redis_sd_client_" ++ atom_to_list(Name) ++ "_browse_reader").
 
 %% @doc Gracefully shutdown the named browse.
 graceful_shutdown(Name) ->
@@ -55,17 +55,17 @@ graceful_shutdown(Name) ->
 %%%===================================================================
 
 init(Browse=#browse{}) ->
-	ReaderName = reader_name(Browse),
+	ReaderName = browse_reader_name(Browse),
 	Browse2 = Browse#browse{reader=ReaderName},
-	ReaderSpec = {ReaderName,
-		{redis_sd_client_reader, start_link, [Browse2]},
-		transient, 2000, worker, [redis_sd_client_reader]},
 	BrowseSpec = {redis_sd_client_browse,
 		{redis_sd_client_browse, start_link, [Browse2]},
 		transient, 2000, worker, [redis_sd_client_browse]},
+	ReaderSpec = {ReaderName,
+		{redis_sd_client_browse_reader, start_link, [Browse2]},
+		transient, 2000, worker, [redis_sd_client_browse_reader]},
 	%% five restarts in 60 seconds, then shutdown
 	Restart = {one_for_all, 5, 60},
-	{ok, {Restart, [ReaderSpec, BrowseSpec]}}.
+	{ok, {Restart, [BrowseSpec, ReaderSpec]}}.
 
 %%%-------------------------------------------------------------------
 %%% Internal functions
@@ -73,6 +73,6 @@ init(Browse=#browse{}) ->
 
 %% @private
 sync_spec(Browse=#browse{}) ->
-	{undefined,
+	{redis_sd_client_browse_sync,
 		{redis_sd_client_browse_sync, start_link, [Browse]},
 		temporary, brutal_kill, worker, [redis_sd_client_browse_sync]}.

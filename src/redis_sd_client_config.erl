@@ -33,7 +33,10 @@ list_to_browse(B) ->
 		type     = opt(type, B, Default#browse.type),
 		domain   = opt(domain, B, Default#browse.domain),
 		greedy   = opt(greedy, B, Default#browse.greedy),
-		handler  = opt(handler, B, Default#browse.handler),
+
+		%% Browser Options
+		browser      = opt(browser, B, Default#browse.browser),
+		browser_opts = opt(browser_opts, B, Default#browse.browser_opts),
 
 		%% Redis Options
 		redis_opts = opt(redis_opts, B, Default#browse.redis_opts),

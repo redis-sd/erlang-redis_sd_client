@@ -13,97 +13,82 @@
 -include("redis_sd_client.hrl").
 
 %% API
--export([get/2, hostname/1, service/1, type/1, domain/1, greedy/1, refresh/1]).
+-export([refresh/1]).
 
 %%%===================================================================
 %%% API functions
 %%%===================================================================
 
-%% @doc Update and return the list of keys of the Browse.
-get([], Browse) ->
-	{ok, [], Browse};
-get(List, Browse) ->
-	g(List, Browse, []).
-
-hostname(Browse=#browse{hostname=undefined}) ->
-	H = <<>>,
-	{ok, H, Browse#browse{h_glob=H}};
-hostname(Browse=#browse{hostname=Hostname}) ->
-	H = iolist_to_binary([$., glob(Hostname)]),
-	{ok, H, Browse#browse{h_glob=H}}.
-
-service(Browse=#browse{service=undefined}) ->
-	S = <<"_*">>,
-	{ok, S, Browse#browse{s_glob=S}};
-service(Browse=#browse{service=Service}) ->
-	S = iolist_to_binary([$_, glob(Service)]),
-	{ok, S, Browse#browse{s_glob=S}}.
-
-type(Browse=#browse{type=undefined}) ->
-	T = <<"_*.">>,
-	{ok, T, Browse#browse{t_glob=T}};
-type(Browse=#browse{type=Type}) ->
-	T = iolist_to_binary([$_, glob(Type), $.]),
-	{ok, T, Browse#browse{t_glob=T}}.
-
-domain(Browse=#browse{domain=undefined}) ->
-	D = <<"*.">>,
-	{ok, D, Browse#browse{d_glob=D}};
-domain(Browse=#browse{domain=Domain}) ->
-	D = iolist_to_binary([redis_sd:nsreverse(glob(Domain)), $.]),
-	{ok, D, Browse#browse{d_glob=D}}.
-
-greedy(Browse=#browse{greedy=true}) ->
-	G = <<"*">>,
-	{ok, G, Browse#browse{g_glob=G}};
-greedy(Browse) ->
-	G = <<>>,
-	{ok, G, Browse#browse{g_glob=G}}.
-
 %% @doc Update and return the pattern for the Browse.
-refresh(Browse=#browse{}) ->
-	case get([domain, type, service, hostname, greedy], Browse) of
-		{ok, GlobList, Browse2} ->
-			Pattern = iolist_to_binary(GlobList),
-			{ok, Pattern, Browse2#browse{glob=Pattern}};
-		Error ->
-			Error
-	end.
+refresh(Browse=#browse{domain=D, type=T, service=S, hostname=H, instance=I, greedy=G}) ->
+	Patterns = patterns([D, T, S, H, I], G, 0, []),
+	{ok, Patterns, Browse}.
 
 %%%-------------------------------------------------------------------
 %%% Internal functions
 %%%-------------------------------------------------------------------
 
 %% @private
-g([], Browse, Acc) ->
-	{ok, lists:reverse(Acc), Browse};
-g([Key | Keys], Browse, Acc) when Key =/= glob ->
-	case ?MODULE:Key(Browse) of
-		{ok, Val, Browse2} ->
-			g(Keys, Browse2, [Val | Acc]);
-		Error ->
-			Error
-	end.
+patterns([undefined | Rest], G, C, P) ->
+	patterns(Rest, G, C+1, P);
+patterns([Label | Rest], G, 0, P) ->
+	patterns(Rest, G, 1, [redis_sd:nsreverse(glob(Label, false)) | P]);
+patterns([Label | Rest], G, 4, P) ->
+	patterns(Rest, G, 5, [glob(Label, true) | P]);
+patterns([Label | Rest], G, C, P) when C == 1 orelse C == 2 ->
+	patterns(Rest, G, C+1, [[$_, glob(Label, false)] | fill(C, P)]);
+patterns([Label | Rest], G, C, P) ->
+	patterns(Rest, G, C+1, [glob(Label, false) | fill(C, P)]);
+patterns([], _G, _C, []) ->
+	[<<"*">>];
+patterns([], _G, C, P) when length(P) == C ->
+	[glob_join(P, [])];
+patterns([], true, _C, P) ->
+	[glob_join(P, []), glob_join([<<"*">> | P], [])];
+patterns([], _G, _C, P) ->
+	[glob_join(P, [])].
 
 %% @private
-glob('*') ->
+fill({C, C}, P) ->
+	P;
+fill({C, _N}, P) when length(P) == C ->
+	P;
+fill({C, N}, P) when N == 1 orelse N == 2 ->
+	fill({C, N+1}, [<<"_*">> | P]);
+fill({C, N}, P) ->
+	fill({C, N+1}, [<<"*">> | P]);
+fill(C, P) ->
+	fill({C, 0}, P).
+
+%% @private
+glob_join([], Glob) ->
+	iolist_to_binary(Glob);
+glob_join([Token | Tokens], []) ->
+	glob_join(Tokens, [Token]);
+glob_join([Token | Tokens], Glob) ->
+	glob_join(Tokens, [[Token, $.] | Glob]).
+
+%% @private
+glob('*', _) ->
 	<< $* >>;
-glob('?') ->
+glob('?', _) ->
 	<< $? >>;
-glob(Atom) when is_atom(Atom) ->
-	atom_to_binary(Atom, utf8);
-glob(Binary) when is_binary(Binary) ->
+glob(Atom, Encode) when is_atom(Atom) ->
+	glob(atom_to_binary(Atom, utf8), Encode);
+glob(Binary, true) when is_binary(Binary) ->
 	redis_sd:urlencode(Binary);
-glob(List) when is_list(List) ->
+glob(Binary, false) when is_binary(Binary) ->
+	Binary;
+glob(List, Encode) when is_list(List) ->
 	case catch iolist_to_binary(List) of
 		Binary when is_binary(Binary) ->
-			Binary;
+			glob(Binary, Encode);
 		_ ->
-			glob(List, [])
+			glob(List, Encode, [])
 	end.
 
 %% @private
-glob([], Glob) ->
-	iolist_to_binary(lists:reverse(Glob));
-glob([Token | Tokens], Glob) ->
-	glob(Tokens, [glob(Token) | Glob]).
+glob([], Encode, Glob) ->
+	glob(iolist_to_binary(lists:reverse(Glob)), Encode);
+glob([Token | Tokens], Encode, Glob) ->
+	glob(Tokens, Encode, [glob(Token, Encode) | Glob]).

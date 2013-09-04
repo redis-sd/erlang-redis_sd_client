@@ -13,12 +13,16 @@
 
 -record(browse, {
 	name     = undefined :: undefined | atom(),
+	instance = undefined :: undefined | browse_pattern(),
 	hostname = undefined :: undefined | browse_pattern(),
 	service  = undefined :: undefined | browse_pattern(),
 	type     = undefined :: undefined | browse_pattern(),
 	domain   = undefined :: undefined | browse_pattern(),
 	greedy   = true      :: boolean(),
-	handler  = undefined :: undefined | module(),
+
+	%% Browser Options
+	browser      = undefined :: undefined | module(),
+	browser_opts = undefined :: undefined | any(),
 
 	%% Redis Options
 	redis_opts = {tcp, ["127.0.0.1", 6379]} :: {tcp | unix, [string() | integer() | timeout()]},
@@ -43,13 +47,8 @@
 	aref     = undefined :: undefined | reference(),
 	sref     = undefined :: undefined | reference(),
 	reader   = undefined :: undefined | atom(),
+	sync     = undefined :: undefined | {pid(), reference()},
 
 	%% Pattern Cache
-	h_glob  = undefined :: undefined | binary(),
-	s_glob  = undefined :: undefined | binary(),
-	t_glob  = undefined :: undefined | binary(),
-	d_glob  = undefined :: undefined | binary(),
-	g_glob  = undefined :: undefined | binary(),
-	glob    = undefined :: undefined | binary(),
-	channel = undefined :: undefined | binary()
+	channels = undefined :: undefined | [binary()]
 }).
