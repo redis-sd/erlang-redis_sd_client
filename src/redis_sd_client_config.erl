@@ -28,6 +28,7 @@ list_to_browse(B) ->
 	Default = #browse{},
 	#browse{
 		name     = req(name, B),
+		instance = opt(instance, B, Default#browse.instance),
 		hostname = opt(hostname, B, Default#browse.hostname),
 		service  = opt(service, B, Default#browse.service),
 		type     = opt(type, B, Default#browse.type),
