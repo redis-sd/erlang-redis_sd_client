@@ -129,7 +129,9 @@ connect(timeout, Browse=#browse{redis_opts={Transport, Args}, backoff=Backoff}) 
 			BRef = start_connect(Browse),
 			{_Delay, Backoff2} = backoff:fail(Backoff),
 			{next_state, connect, Browse#browse{backoff=Backoff2, bref=BRef}}
-	end.
+	end;
+connect(timeout, Browse=#browse{redis_opts=BadRedisOpts}) ->
+	{stop, {error, {bad_redis_opts, BadRedisOpts}}, Browse}.
 
 %% @private
 authorize(timeout, Browse=#browse{redis_auth=undefined}) ->
