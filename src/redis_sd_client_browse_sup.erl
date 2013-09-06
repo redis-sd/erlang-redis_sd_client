@@ -39,11 +39,13 @@ browse_sup_name(#browse{name=Name}) ->
 	list_to_atom("redis_sd_client_" ++ atom_to_list(Name) ++ "_browse_sup").
 
 browse_reader_name(#browse{name=Name}) ->
+	browse_reader_name(Name);
+browse_reader_name(Name) when is_atom(Name) ->
 	list_to_atom("redis_sd_client_" ++ atom_to_list(Name) ++ "_browse_reader").
 
 %% @doc Gracefully shutdown the named browse.
 graceful_shutdown(Name) ->
-	case catch redis_sd_client_browse:graceful_shutdown(Name) of
+	case catch redis_sd_client_browse_reader:graceful_shutdown(browse_reader_name(Name)) of
 		ok ->
 			ok;
 		_ ->

@@ -15,7 +15,7 @@
 %% API
 -export([manager/0, add_handler/2]).
 -export([browse_init/1, browse_connect/1, browse_subscribe/2, browse_terminate/2]).
--export([service_add/4, service_remove/4]).
+-export([service_add/2, service_remove/2]).
 
 %%%===================================================================
 %%% API functions
@@ -39,11 +39,11 @@ browse_subscribe(Channel, Browse=#browse{}) ->
 browse_terminate(Reason, Browse=#browse{}) ->
 	notify({browse, terminate, Reason, Browse}).
 
-service_add(Domain, Type, Service, Browse=#browse{}) ->
-	notify({service, add, Domain, Type, Service, Browse}).
+service_add(Record, Browse=#browse{}) ->
+	notify({service, add, Record, Browse}).
 
-service_remove(Domain, Type, Service, Browse=#browse{}) ->
-	notify({service, remove, Domain, Type, Service, Browse}).
+service_remove(Record, Browse=#browse{}) ->
+	notify({service, remove, Record, Browse}).
 
 %%%-------------------------------------------------------------------
 %%% Internal functions

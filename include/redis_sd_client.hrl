@@ -9,6 +9,8 @@
 %%% Created :  30 Aug 2013 by Andrew Bennett <andrew@pagodabox.com>
 %%%-------------------------------------------------------------------
 
+-include_lib("redis_sd_spec/include/redis_sd.hrl").
+
 -type browse_pattern() :: string() | [string() | '*' | '?' | atom()].
 
 -record(browse, {

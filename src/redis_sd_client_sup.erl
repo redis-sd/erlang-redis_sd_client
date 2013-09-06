@@ -62,6 +62,7 @@ delete_browse(Name) ->
 %%%===================================================================
 
 init([]) ->
+	redis_sd_client = ets:new(redis_sd_client, [ordered_set, public, named_table]),
 	ManagerSpec = {redis_sd_client_event:manager(),
 		{gen_event, start_link, [{local, redis_sd_client_event:manager()}]},
 		permanent, 5000, worker, [gen_event]},

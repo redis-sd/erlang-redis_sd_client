@@ -14,17 +14,16 @@
 -include("redis_sd_client.hrl").
 
 -define(SERVER, ?MODULE).
+-define(TAB, ?MODULE).
 
 %% API
--export([manual_start/0, new_browse/1, rm_browse/1, delete_browse/1, list/0, start_link/0]).
+-export([manual_start/0, new_browse/1, rm_browse/1, delete_browse/1, list/0, list/1, start_link/0]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
 	terminate/2, code_change/3]).
 
--record(state, {
-	discovered = dict:new() :: dict()
-}).
+-record(state, {}).
 
 %%%===================================================================
 %%% API functions
@@ -50,7 +49,10 @@ delete_browse(BrowseName) ->
 	redis_sd_client_sup:delete_browse(BrowseName).
 
 list() ->
-	gen_server:call(?SERVER, list).
+	ets:match_object(?TAB, '$0').
+
+list(BrowseName) ->
+	ets:match_object(?TAB, {{{browse, BrowseName}, '_'}, '_', '_', '_', '_'}).
 
 %% @private
 start_link() ->
@@ -67,37 +69,27 @@ init([]) ->
 	{ok, State}.
 
 %% @private
-handle_call(list, _From, State=#state{discovered=Discovered}) ->
-	{reply, dict:to_list(Discovered), State};
 handle_call(_Request, _From, State) ->
-	Reply = {ok, _Request},
-	{reply, Reply, State}.
+	{reply, ignore, State}.
 
 %% @private
 handle_cast(_Request, State) ->
 	{noreply, State}.
 
 %% @private
-handle_info({'$redis_sd', {browse, terminate, normal, #browse{name=Name}}}, State=#state{discovered=Discovered}) ->
+handle_info({'$redis_sd', {browse, terminate, normal, #browse{name=Name}}}, State) ->
 	ok = redis_sd_client:delete_browse(Name),
-	Discovered2 = dict:fold(fun
-		({N, _Domain, _Type}, _V, D) when N =:= Name ->
-			D;
-		(K, V, D) ->
-			dict:store(K, V, D)
-	end, dict:new(), Discovered),
-	{noreply, State#state{discovered=Discovered2}};
-handle_info({'$redis_sd', {service, add, Domain, Type, {{Target, Port}, Options, _TTL}, #browse{name=Name}}}, State=#state{discovered=Discovered}) ->
-	Service = {{Target, Port}, Options},
-	Discovered2 = dict:update({Name, Domain, Type}, fun(Services) ->
-		lists:keystore({Target, Port}, 1, Services, Service)
-	end, [Service], Discovered),
-	{noreply, State#state{discovered=Discovered2}};
-handle_info({'$redis_sd', {service, remove, Domain, Type, {{Target, Port}, _Options, _TTL}, #browse{name=Name}}}, State=#state{discovered=Discovered}) ->
-	Discovered2 = dict:update({Name, Domain, Type}, fun(Services) ->
-		lists:keydelete({Target, Port}, 1, Services)
-	end, [], Discovered),
-	{noreply, State#state{discovered=Discovered2}};
+	ets:match_delete(?TAB, {{{browse, Name}, '_'}, '_', '_', '_', '_'}),
+	{noreply, State};
+handle_info({'$redis_sd', {service, add, #redis_sd{ttl=TTL, domain=D, type=T, service=S, hostname=H, instance=I, target=Target, port=Port, txtdata=TXTData}, #browse{name=N}}}, State) ->
+	Key = {{browse, N}, {D, T, S, H, I}},
+	Object = {Key, TTL, Target, Port, TXTData},
+	ets:insert(?TAB, Object),
+	{noreply, State};
+handle_info({'$redis_sd', {service, remove, #redis_sd{domain=D, type=T, service=S, hostname=H, instance=I}, #browse{name=N}}}, State) ->
+	Key = {{browse, N}, {D, T, S, H, I}},
+	ets:delete(?TAB, Key),
+	{noreply, State};
 handle_info({'$redis_sd', _Event}, State) ->
 	{noreply, State};
 handle_info(Info, State) ->
