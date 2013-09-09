@@ -12,15 +12,11 @@
 
 -include("redis_sd_client.hrl").
 
--type domain()  :: binary().
--type type()    :: binary().
--type service() :: {binary(), binary(), integer(), [{binary(), binary()}], integer()}.
-
 -callback browser_init(Browse::#browse{}, Options::any())
 	-> {ok, State::any()}.
--callback browser_service_add(Domain::domain(), Type::type(), Service::service(), State::any())
+-callback browser_service_add(Record::redis_sd:obj(), State::any())
 	-> {ok, State::any()}.
--callback browser_service_remove(Domain::domain(), Type::type(), Service::service(), State::any())
+-callback browser_service_remove(Record::redis_sd:obj(), State::any())
 	-> {ok, State::any()}.
 -callback browser_call(Request::any(), From::{pid(), reference()}, State::any())
 	-> {noreply, State::any()}
