@@ -52,7 +52,7 @@ list() ->
 	ets:match_object(?TAB, '$0').
 
 list(BrowseName) ->
-	ets:match_object(?TAB, {{{browse, BrowseName}, '_'}, '_', '_', '_', '_'}).
+	ets:match_object(?TAB, {{{browse, BrowseName}, '_'}, '_'}).
 
 %% @private
 start_link() ->
@@ -79,16 +79,17 @@ handle_cast(_Request, State) ->
 %% @private
 handle_info({'$redis_sd', {browse, terminate, normal, #browse{name=Name}}}, State) ->
 	ok = redis_sd_client:delete_browse(Name),
-	ets:match_delete(?TAB, {{{browse, Name}, '_'}, '_', '_', '_', '_'}),
+	ets:match_delete(?TAB, {{{browse, Name}, '_'}, '_'}),
 	{noreply, State};
-handle_info({'$redis_sd', {service, add, #redis_sd{ttl=TTL, domain=D, type=T, service=S, hostname=H, instance=I, target=Target, port=Port, txtdata=TXTData}, #browse{name=N}}}, State) ->
-	Key = {{browse, N}, {D, T, S, H, I}},
-	Object = {Key, TTL, Target, Port, TXTData},
+handle_info({'$redis_sd', {service, add, DNSSD, #browse{name=Name}}}, State) ->
+	Key = redis_sd:obj_key(DNSSD),
+	Val = redis_sd:obj_val(DNSSD),
+	Object = {{{browse, Name}, Key}, Val},
 	ets:insert(?TAB, Object),
 	{noreply, State};
-handle_info({'$redis_sd', {service, remove, #redis_sd{domain=D, type=T, service=S, hostname=H, instance=I}, #browse{name=N}}}, State) ->
-	Key = {{browse, N}, {D, T, S, H, I}},
-	ets:delete(?TAB, Key),
+handle_info({'$redis_sd', {service, remove, DNSSD, #browse{name=Name}}}, State) ->
+	Key = redis_sd:obj_key(DNSSD),
+	ets:delete(?TAB, {{browse, Name}, Key}),
 	{noreply, State};
 handle_info({'$redis_sd', _Event}, State) ->
 	{noreply, State};

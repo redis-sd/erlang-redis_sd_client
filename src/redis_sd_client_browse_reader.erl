@@ -187,7 +187,7 @@ redis_auth(Password, #browse{redis_cli=Client, cmd_auth=AUTH}) ->
 
 %% @private
 redis_psubscribe(Patterns, #browse{redis_sub=Subscriber, redis_ns=Namespace, cmd_psubscribe=PSUBSCRIBE}) ->
-	Channels = [iolist_to_binary([Namespace, "PTR:", Pattern]) || Pattern <- Patterns],
+	Channels = [iolist_to_binary([Namespace, "KEY:", Pattern]) || Pattern <- Patterns],
 	Command = [PSUBSCRIBE | Channels],
 	try hierdis_async:append_command(Subscriber, Command) of
 		{ok, _} ->

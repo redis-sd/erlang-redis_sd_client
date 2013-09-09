@@ -70,13 +70,13 @@ handle_cast(Request, Parser) ->
 
 %% @private
 handle_info('$redis_sd_tick', Parser=#parser{discovered=Discovered, browse=Browse}) ->
-	Discovered2 = dict:fold(fun({Domain, Type, Service, Hostname, Instance}, Record=#redis_sd{ttl=TTL}, D) ->
+	Discovered2 = dict:fold(fun({Domain, Type, Service, Instance}, Record=#dns_sd{ttl=TTL}, D) ->
 		case TTL - 1 of
 			TTL2 when TTL2 =< 0 ->
-				ok = gen_server:cast(Browse#browse.name, {service_remove, Record#redis_sd{ttl=TTL2}}),
+				ok = gen_server:cast(Browse#browse.name, {service_remove, Record#dns_sd{ttl=TTL2}}),
 				D;
 			TTL2 ->
-				dict:store({Domain, Type, Service, Hostname, Instance}, Record#redis_sd{ttl=TTL2}, D)
+				dict:store({Domain, Type, Service, Instance}, Record#dns_sd{ttl=TTL2}, D)
 		end
 	end, dict:new(), Discovered),
 	{noreply, Parser#parser{discovered=Discovered2}};
@@ -162,16 +162,23 @@ browser_terminate(Reason, #parser{browser=Browser, state=State}) ->
 %% @private
 handle_parse([], Parser) ->
 	{noreply, Parser};
-handle_parse([{Key, Val, TTL} | KeyVals], Parser) ->
-	{Header, Type, Questions, Answers, Authorities, Resources} = parse_record(Val),
-	QR = proplists:get_value(qr, Header),
-	Opcode = proplists:get_value(opcode, Header),
-	Data = {Questions, Answers, Authorities, Resources},
-	case handle_record(Key, Header, Type, QR, Opcode, Data, TTL, Parser) of
-		{ok, Parser2} ->
-			handle_parse(KeyVals, Parser2);
-		{stop, Reason, Parser2} ->
-			{stop, Reason, Parser2}
+handle_parse([{Key0, Val, TTL} | KeyVals], Parser=#parser{browse=#browse{redis_ns=Namespace0}}) ->
+	Namespace = iolist_to_binary(Namespace0),
+	NamespaceLen = byte_size(Namespace),
+	case Key0 of
+		<< Namespace:NamespaceLen/binary, "KEY:", Key/binary >> ->
+			{Header, Type, Questions, Answers, Authorities, Resources} = parse_record(Val),
+			QR = proplists:get_value(qr, Header),
+			Opcode = proplists:get_value(opcode, Header),
+			Data = {Questions, Answers, Authorities, Resources},
+			case handle_record(Key, Header, Type, QR, Opcode, Data, TTL, Parser) of
+				{ok, Parser2} ->
+					handle_parse(KeyVals, Parser2);
+				{stop, Reason, Parser2} ->
+					{stop, Reason, Parser2}
+			end;
+		_ ->
+			handle_parse(KeyVals, Parser)
 	end.
 
 %% @private
@@ -185,38 +192,38 @@ parse_record(Record) ->
 	{Header, Type, Questions, Answers, Authorities, Resources}.
 
 %% @private
-handle_record(_Key, _Header, msg, true, 'query', {[], Answers, [], Resources}, TTL, Parser) ->
-	handle_advertisement(Answers, Resources, TTL, Parser);
+handle_record(Key, _Header, msg, true, 'query', {[], Answers, [], Resources}, TTL, Parser) ->
+	handle_advertisement(Answers, Resources, Key, TTL, Parser);
 handle_record(_Key, _Header, _Type, _QR, _Opcode, _Data, _TTL, Parser) ->
 	{ok, Parser}.
 
 %% @private
-handle_advertisement([], _Resources, _TTL, Parser) ->
+handle_advertisement([], _Resources, _Key, _TTL, Parser) ->
 	{ok, Parser};
-handle_advertisement([Answer | Answers], Resources, TTL, Parser=#parser{discovered=Discovered, browse=Browse}) ->
+handle_advertisement([Answer | Answers], Resources, Key, TTL, Parser=#parser{discovered=Discovered, browse=Browse}) ->
 	AnswerData = data(Answer),
 	AnswerDomain = domain(Answer),
 	ResourceTypes = [{type(Resource), data(Resource)} || Resource <- Resources, domain(Resource) =:= AnswerData],
 	AnswerTTL = ttl(Answer, TTL),
-	R = {iolist_to_binary(AnswerData), iolist_to_binary(AnswerDomain), ResourceTypes},
-	S = #redis_sd{ttl=AnswerTTL},
+	R = {iolist_to_binary(AnswerData), iolist_to_binary(AnswerDomain), Key, ResourceTypes},
+	S = #dns_sd{ttl=AnswerTTL},
 	case handle_answer(R, S) of
-		{add, S2=#redis_sd{domain=Domain, type=Type, service=Service, hostname=Hostname, instance=Instance}} ->
-			Discovered2 = dict:store({Domain, Type, Service, Hostname, Instance}, S2, Discovered),
+		{add, S2=#dns_sd{domain=Domain, type=Type, service=Service, instance=Instance}} ->
+			Discovered2 = dict:store({Domain, Type, Service, Instance}, S2, Discovered),
 			{ok, Parser2} = browser_service_add(S2, Parser#parser{discovered=Discovered2}),
 			redis_sd_client_event:service_add(S2, Browse),
-			handle_advertisement(Answers, Resources, TTL, Parser2);
-		{remove, S2=#redis_sd{domain=Domain, type=Type, service=Service, hostname=Hostname, instance=Instance}} ->
-			Discovered2 = dict:erase({Domain, Type, Service, Hostname, Instance}, Discovered),
+			handle_advertisement(Answers, Resources, Key, TTL, Parser2);
+		{remove, S2=#dns_sd{domain=Domain, type=Type, service=Service, instance=Instance}} ->
+			Discovered2 = dict:erase({Domain, Type, Service, Instance}, Discovered),
 			{ok, Parser2} = browser_service_remove(S2, Parser#parser{discovered=Discovered2}),
 			redis_sd_client_event:service_remove(S2, Browse),
-			handle_advertisement(Answers, Resources, TTL, Parser2);
+			handle_advertisement(Answers, Resources, Key, TTL, Parser2);
 		ignore ->
-			handle_advertisement(Answers, Resources, TTL, Parser)
+			handle_advertisement(Answers, Resources, Key, TTL, Parser)
 	end.
 
 %% @private
-handle_answer({InstKey, TypeKey, Resources}, S=#redis_sd{target=undefined, port=undefined, txtdata=undefined}) ->
+handle_answer({SRV, PTR, KEY, Resources}, S=#dns_sd{priority=undefined, weight=undefined, port=undefined, target=undefined, txtdata=undefined}) ->
 	case get_value(txt, Resources) of
 		undefined ->
 			ignore;
@@ -224,24 +231,19 @@ handle_answer({InstKey, TypeKey, Resources}, S=#redis_sd{target=undefined, port=
 			case get_value(srv, Resources) of
 				undefined ->
 					ignore;
-				{_Priority, _Weight, Port, TargetString} ->
+				{Priority, Weight, Port, TargetString} ->
 					Target = iolist_to_binary(TargetString),
 					TXTData = parse_txt(TXT, []),
-					handle_answer({InstKey, TypeKey}, S#redis_sd{target=Target, port=Port, txtdata=TXTData})
+					handle_answer({SRV, PTR, KEY}, S#dns_sd{priority=Priority, weight=Weight, port=Port, target=Target, txtdata=TXTData})
 			end
 	end;
-handle_answer({InstKey, TypeKey}, S=#redis_sd{domain=undefined, type=undefined, service=undefined}) ->
-	case parse_service_type_domain(TypeKey) of
-		{Service, Type, Domain} ->
-			handle_answer({InstKey, TypeKey}, S#redis_sd{domain=Domain, type=Type, service=Service});
-		_ ->
-			ignore
-	end;
-handle_answer({InstKey, TypeKey}, S=#redis_sd{ttl=TTL, hostname=undefined, instance=undefined}) ->
-	case parse_hostname_instance(InstKey, TypeKey) of
-		{Hostname, Instance} ->
-			handle_answer(TTL, S#redis_sd{hostname=Hostname, instance=Instance});
-		_ ->
+handle_answer({SRV, PTR, KEY}, S=#dns_sd{domain=undefined, type=undefined, service=undefined, instance=undefined, ttl=TTL}) ->
+	Keys = [{ptr, PTR}, {srv, SRV}, {key, KEY}],
+	try redis_sd:keys_to_labels(Keys) of
+		{Domain, Type, Service, Instance} ->
+			handle_answer(TTL, S#dns_sd{domain=Domain, type=Type, service=Service, instance=Instance})
+	catch
+		_:_ ->
 			ignore
 	end;
 handle_answer(TTL, S) when is_integer(TTL) andalso TTL =< 0 ->
@@ -279,49 +281,6 @@ ttl(_Resource, TTL) when is_integer(TTL) ->
 	TTL;
 ttl(Resource, undefined) ->
 	get_value(ttl, Resource).
-
-%% @private
-parse_service_type_domain(N) ->
-	case redis_sd:nssplit(N) of
-		[<< $_, Service/binary >>, << $_, Type/binary >> | DomainLabels] ->
-			Domain = redis_sd:nsjoin(DomainLabels),
-			{Service, Type, Domain};
-		_ ->
-			ignore
-	end.
-
-%% @private
-parse_hostname_instance(InstKey, TypeKey) when is_binary(InstKey) andalso is_binary(TypeKey) ->
-	case parse_instance(InstKey, TypeKey) of
-		{HostnameInstance, TypeKey} ->
-			case parse_hostname(HostnameInstance) of
-				{Hostname, Instance} ->
-					{Hostname, Instance};
-				_ ->
-					ignore
-			end;
-		_ ->
-			ignore
-	end.
-
-%% @private
-parse_instance(InstKey, TypeKey) when is_binary(InstKey) andalso is_binary(TypeKey) ->
-	case binary:longest_common_suffix([InstKey, << $., TypeKey/binary >>]) of
-		0 ->
-			ignore;
-		N ->
-			{binary:part(InstKey, 0, byte_size(InstKey) - N), TypeKey}
-	end.
-
-%% @private
-parse_hostname(N) ->
-	parse_hostname(redis_sd:nssplit(N), []).
-
-%% @private
-parse_hostname([Hostname], Acc) ->
-	{Hostname, redis_sd:nsjoin(lists:reverse(Acc))};
-parse_hostname([InstLabel | Rest], Acc) ->
-	parse_hostname(Rest, [InstLabel | Acc]).
 
 %% @private
 parse_txt([], Acc) ->

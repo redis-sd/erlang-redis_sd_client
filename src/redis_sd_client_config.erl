@@ -28,11 +28,10 @@ list_to_browse(B) ->
 	Default = #browse{},
 	#browse{
 		name     = req(name, B),
-		instance = opt(instance, B, Default#browse.instance),
-		hostname = opt(hostname, B, Default#browse.hostname),
-		service  = opt(service, B, Default#browse.service),
-		type     = opt(type, B, Default#browse.type),
 		domain   = opt(domain, B, Default#browse.domain),
+		type     = opt(type, B, Default#browse.type),
+		service  = opt(service, B, Default#browse.service),
+		instance = opt(instance, B, Default#browse.instance),
 		greedy   = opt(greedy, B, Default#browse.greedy),
 
 		%% Browser Options

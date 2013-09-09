@@ -15,11 +15,10 @@
 
 -record(browse, {
 	name     = undefined :: undefined | atom(),
-	instance = undefined :: undefined | browse_pattern(),
-	hostname = undefined :: undefined | browse_pattern(),
-	service  = undefined :: undefined | browse_pattern(),
-	type     = undefined :: undefined | browse_pattern(),
 	domain   = undefined :: undefined | browse_pattern(),
+	type     = undefined :: undefined | browse_pattern(),
+	service  = undefined :: undefined | browse_pattern(),
+	instance = undefined :: undefined | browse_pattern(),
 	greedy   = true      :: boolean(),
 
 	%% Browser Options

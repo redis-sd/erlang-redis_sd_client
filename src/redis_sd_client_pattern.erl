@@ -20,8 +20,8 @@
 %%%===================================================================
 
 %% @doc Update and return the pattern for the Browse.
-refresh(Browse=#browse{domain=D, type=T, service=S, hostname=H, instance=I, greedy=G}) ->
-	Patterns = patterns([D, T, S, H, I], G, 0, []),
+refresh(Browse=#browse{domain=D, type=T, service=S, instance=I, greedy=G}) ->
+	Patterns = patterns([D, T, S, I], G, 0, []),
 	{ok, Patterns, Browse}.
 
 %%%-------------------------------------------------------------------
@@ -32,9 +32,9 @@ refresh(Browse=#browse{domain=D, type=T, service=S, hostname=H, instance=I, gree
 patterns([undefined | Rest], G, C, P) ->
 	patterns(Rest, G, C+1, P);
 patterns([Label | Rest], G, 0, P) ->
-	patterns(Rest, G, 1, [redis_sd:nsreverse(glob(Label, false)) | P]);
-patterns([Label | Rest], G, 4, P) ->
-	patterns(Rest, G, 5, [glob(Label, true) | P]);
+	patterns(Rest, G, 1, [redis_sd_ns:reverse(glob(Label, false)) | P]);
+patterns([Label | Rest], G, 3, P) ->
+	patterns(Rest, G, 4, [glob(Label, true) | P]);
 patterns([Label | Rest], G, C, P) when C == 1 orelse C == 2 ->
 	patterns(Rest, G, C+1, [[$_, glob(Label, false)] | fill(C, P)]);
 patterns([Label | Rest], G, C, P) ->
