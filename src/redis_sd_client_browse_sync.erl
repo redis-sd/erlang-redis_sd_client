@@ -71,7 +71,9 @@ read(Browse=?REDIS_SD_BROWSE{ref=BrowseRef}) ->
 		{ok, Keys} ->
 			case redis_keyvals(Keys, Browse) of
 				{ok, KeyVals} ->
-					_ = [redis_sd_client_browse_state:add(BrowseRef, Key, Record) || {Key, Record} <- KeyVals],
+					_ = [begin
+						redis_sd_client_browse_state:add(BrowseRef, Key, Record)
+					end || {Key, Record} <- KeyVals],
 					terminate(normal, Browse);
 				{error, _KeyValsReason} ->
 					terminate(normal, Browse)
@@ -161,7 +163,7 @@ zipkeys([], [], [], Acc) ->
 	lists:reverse(Acc);
 zipkeys([Key | Keys], [Val | Vals], [TTL | TTLs], Acc) ->
 	case catch redis_sd_dns:from_binary(Val) of
-		{ok, Record=?REDIS_SD_DNS{}} ->
+		Record=?REDIS_SD_DNS{} ->
 			zipkeys(Keys, Vals, TTLs, [{Key, Record?REDIS_SD_DNS{ttl=TTL}} | Acc]);
 		_ ->
 			zipkeys(Keys, Vals, TTLs, Acc)
