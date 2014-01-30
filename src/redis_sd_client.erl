@@ -19,7 +19,7 @@
 %% API
 -export([manual_start/0, start_link/0]).
 -export([enable/0, enable/1, disable/0, disable/1, list/0,
-	list_browses/0]).%, list_records/0]).
+	list_browses/0, list_records/0, list_records/1]).
 -export([new_browse/1, rm_browse/1, delete_browse/1, set_enabled/2]).
 
 %% Name Server API
@@ -100,6 +100,12 @@ list_browses() ->
 			Acc
 	end,
 	ets:foldl(FoldFun, orddict:new(), ?TAB).
+
+list_records() ->
+	list_records('_').
+
+list_records(BrowseRef) ->
+	ets:select(?TAB, [{{{record, BrowseRef, '$1'}, '$2'}, [], [{{'$1', '$2'}}]}]).
 
 new_browse(BrowseConfig) ->
 	redis_sd_client_sup:new_browse(BrowseConfig).
