@@ -2,7 +2,7 @@
 %% vim: ts=4 sw=4 ft=erlang noet
 %%%-------------------------------------------------------------------
 %%% @author Andrew Bennett <andrew@pagodabox.com>
-%%% @copyright 2013, Pagoda Box, Inc.
+%%% @copyright 2014, Pagoda Box, Inc.
 %%% @doc
 %%%
 %%% @end
@@ -23,38 +23,45 @@
 %%% API functions
 %%%===================================================================
 
--spec list_to_browse([{atom(), term()}]) -> #browse{}.
+-spec list_to_browse([{atom(), term()}]) -> ?REDIS_SD_BROWSE{}.
 list_to_browse(B) ->
-	Default = #browse{},
-	#browse{
-		name     = req(name, B),
-		domain   = opt(domain, B, Default#browse.domain),
-		type     = opt(type, B, Default#browse.type),
-		service  = opt(service, B, Default#browse.service),
-		instance = opt(instance, B, Default#browse.instance),
-		greedy   = opt(greedy, B, Default#browse.greedy),
+	Default = ?REDIS_SD_BROWSE{},
+	Enabled = opt(enabled, B, Default?REDIS_SD_BROWSE.enabled),
+	case Enabled of
+		false ->
+			ok;
+		true ->
+			ok;
+		BadBoolean ->
+			erlang:error({invalid_enabled_boolean, {enabled, BadBoolean}, B})
+	end,
+	B1 = ?REDIS_SD_BROWSE{
+		enabled = Enabled,
 
-		%% Browser Options
-		browser      = opt(browser, B, Default#browse.browser),
-		browser_opts = opt(browser_opts, B, Default#browse.browser_opts),
+		domain   = opt(domain, B, Default?REDIS_SD_BROWSE.domain),
+		type     = opt(type, B, Default?REDIS_SD_BROWSE.type),
+		service  = opt(service, B, Default?REDIS_SD_BROWSE.service),
+		instance = opt(instance, B, Default?REDIS_SD_BROWSE.instance),
+		greedy   = opt(greedy, B, Default?REDIS_SD_BROWSE.greedy),
 
 		%% Redis Options
-		redis_opts = opt(redis_opts, B, Default#browse.redis_opts),
-		redis_auth = opt(redis_auth, B, Default#browse.redis_auth),
-		redis_ns   = opt(redis_ns, B, Default#browse.redis_ns),
+		redis_opts = opt(redis_opts, B, Default?REDIS_SD_BROWSE.redis_opts),
+		redis_auth = opt(redis_auth, B, Default?REDIS_SD_BROWSE.redis_auth),
+		redis_ns   = opt(redis_ns, B, Default?REDIS_SD_BROWSE.redis_ns),
 
 		%% Redis Commands
-		cmd_auth         = opt(cmd_auth, B, Default#browse.cmd_auth),
-		cmd_keys         = opt(cmd_keys, B, Default#browse.cmd_keys),
-		cmd_mget         = opt(cmd_mget, B, Default#browse.cmd_mget),
-		cmd_psubscribe   = opt(cmd_psubscribe, B, Default#browse.cmd_psubscribe),
-		cmd_punsubscribe = opt(cmd_punsubscribe, B, Default#browse.cmd_punsubscribe),
-		cmd_ttl          = opt(cmd_ttl, B, Default#browse.cmd_ttl),
+		cmd_auth         = opt(cmd_auth, B, Default?REDIS_SD_BROWSE.cmd_auth),
+		cmd_keys         = opt(cmd_keys, B, Default?REDIS_SD_BROWSE.cmd_keys),
+		cmd_mget         = opt(cmd_mget, B, Default?REDIS_SD_BROWSE.cmd_mget),
+		cmd_psubscribe   = opt(cmd_psubscribe, B, Default?REDIS_SD_BROWSE.cmd_psubscribe),
+		cmd_punsubscribe = opt(cmd_punsubscribe, B, Default?REDIS_SD_BROWSE.cmd_punsubscribe),
+		cmd_ttl          = opt(cmd_ttl, B, Default?REDIS_SD_BROWSE.cmd_ttl),
 
 		%% Reconnect Options
-		min_wait = opt(min_wait, B, Default#browse.min_wait),
-		max_wait = opt(max_wait, B, Default#browse.max_wait)
-	}.
+		min_wait = opt(min_wait, B, Default?REDIS_SD_BROWSE.min_wait),
+		max_wait = opt(max_wait, B, Default?REDIS_SD_BROWSE.max_wait)
+	},
+	B1?REDIS_SD_BROWSE{ref=erlang:phash2(B1)}.
 
 %%%-------------------------------------------------------------------
 %%% Internal functions

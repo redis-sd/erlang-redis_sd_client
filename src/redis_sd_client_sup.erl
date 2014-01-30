@@ -2,7 +2,7 @@
 %% vim: ts=4 sw=4 ft=erlang noet
 %%%-------------------------------------------------------------------
 %%% @author Andrew Bennett <andrew@pagodabox.com>
-%%% @copyright 2013, Pagoda Box, Inc.
+%%% @copyright 2014, Pagoda Box, Inc.
 %%% @doc
 %%%
 %%% @end
@@ -89,12 +89,12 @@ init([]) ->
 %%%-------------------------------------------------------------------
 
 %% @private
-browse_sup_spec(Browse=#browse{name=Name}) ->
-	SupName = browse_sup_name(Name),
+browse_sup_spec(Browse=?REDIS_SD_BROWSE{ref=Ref}) ->
+	SupName = browse_sup_name(Ref),
 	{SupName,
 		{redis_sd_client_browse_sup, start_link, [Browse]},
 		transient, 5000, supervisor, [redis_sd_client_browse_sup]}.
 
 %% @private
-browse_sup_name(Name) ->
-	list_to_atom("redis_sd_client_" ++ atom_to_list(Name) ++ "_browse_sup").
+browse_sup_name(Ref) ->
+	list_to_atom("redis_sd_client_" ++ integer_to_list(Ref) ++ "_browse_sup").

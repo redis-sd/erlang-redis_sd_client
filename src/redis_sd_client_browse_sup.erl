@@ -2,7 +2,7 @@
 %% vim: ts=4 sw=4 ft=erlang noet
 %%%-------------------------------------------------------------------
 %%% @author Andrew Bennett <andrew@pagodabox.com>
-%%% @copyright 2013, Pagoda Box, Inc.
+%%% @copyright 2014, Pagoda Box, Inc.
 %%% @doc
 %%%
 %%% @end
@@ -14,7 +14,7 @@
 -include("redis_sd_client.hrl").
 
 %% API
--export([start_link/1, start_sync/1, browse_sup_name/1, browse_reader_name/1, graceful_shutdown/1]).
+-export([start_link/1, start_sync/1, browse_sup_name/1, graceful_shutdown/1]).
 
 %% Supervisor callbacks
 -export([init/1]).
@@ -26,26 +26,23 @@
 %%% API functions
 %%%===================================================================
 
-start_link(Browse=#browse{}) ->
+start_link(Browse=?REDIS_SD_BROWSE{}) ->
 	SupName = browse_sup_name(Browse),
 	supervisor:start_link({local, SupName}, ?MODULE, Browse).
 
-start_sync(Browse=#browse{}) ->
+start_sync(Browse=?REDIS_SD_BROWSE{}) ->
 	SupName = browse_sup_name(Browse),
 	SyncSpec = sync_spec(Browse),
 	supervisor:start_child(SupName, SyncSpec).
 
-browse_sup_name(#browse{name=Name}) ->
-	list_to_atom("redis_sd_client_" ++ atom_to_list(Name) ++ "_browse_sup").
-
-browse_reader_name(#browse{name=Name}) ->
-	browse_reader_name(Name);
-browse_reader_name(Name) when is_atom(Name) ->
-	list_to_atom("redis_sd_client_" ++ atom_to_list(Name) ++ "_browse_reader").
+browse_sup_name(?REDIS_SD_BROWSE{ref=Ref}) ->
+	browse_sup_name(Ref);
+browse_sup_name(Ref) when is_integer(Ref) ->
+	list_to_atom("redis_sd_client_" ++ integer_to_list(Ref) ++ "_browse_sup").
 
 %% @doc Gracefully shutdown the named browse.
-graceful_shutdown(Name) ->
-	case catch redis_sd_client_browse_reader:graceful_shutdown(browse_reader_name(Name)) of
+graceful_shutdown(BrowseRef) ->
+	case catch redis_sd_client_browse:graceful_shutdown(BrowseRef) of
 		ok ->
 			ok;
 		_ ->
@@ -56,25 +53,23 @@ graceful_shutdown(Name) ->
 %%% Supervisor callbacks
 %%%===================================================================
 
-init(Browse=#browse{}) ->
-	ReaderName = browse_reader_name(Browse),
-	Browse2 = Browse#browse{reader=ReaderName},
+init(Browse=?REDIS_SD_BROWSE{}) ->
+	StateSpec = {redis_sd_client_browse_state,
+		{redis_sd_client_browse_state, start_link, [Browse]},
+		transient, 2000, worker, [redis_sd_client_browse_state]},
 	BrowseSpec = {redis_sd_client_browse,
-		{redis_sd_client_browse, start_link, [Browse2]},
+		{redis_sd_client_browse, start_link, [Browse]},
 		transient, 2000, worker, [redis_sd_client_browse]},
-	ReaderSpec = {ReaderName,
-		{redis_sd_client_browse_reader, start_link, [Browse2]},
-		transient, 2000, worker, [redis_sd_client_browse_reader]},
 	%% five restarts in 60 seconds, then shutdown
 	Restart = {one_for_all, 5, 60},
-	{ok, {Restart, [BrowseSpec, ReaderSpec]}}.
+	{ok, {Restart, [StateSpec, BrowseSpec]}}.
 
 %%%-------------------------------------------------------------------
 %%% Internal functions
 %%%-------------------------------------------------------------------
 
 %% @private
-sync_spec(Browse=#browse{}) ->
+sync_spec(Browse=?REDIS_SD_BROWSE{}) ->
 	{redis_sd_client_browse_sync,
 		{redis_sd_client_browse_sync, start_link, [Browse]},
 		temporary, brutal_kill, worker, [redis_sd_client_browse_sync]}.

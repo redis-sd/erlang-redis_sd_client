@@ -2,7 +2,7 @@
 %% vim: ts=4 sw=4 ft=erlang noet
 %%%-------------------------------------------------------------------
 %%% @author Andrew Bennett <andrew@pagodabox.com>
-%%% @copyright 2013, Pagoda Box, Inc.
+%%% @copyright 2014, Pagoda Box, Inc.
 %%% @doc
 %%%
 %%% @end
@@ -20,9 +20,9 @@
 %%%===================================================================
 
 %% @doc Update and return the pattern for the Browse.
-refresh(Browse=#browse{domain=D, type=T, service=S, instance=I, greedy=G}) ->
-	Patterns = patterns([D, T, S, I], G, 0, []),
-	{ok, Patterns, Browse}.
+refresh(Browse=?REDIS_SD_BROWSE{domain=D, type=T, service=S, instance=I, greedy=G, redis_ns=Namespace}) ->
+	Channels = [redis_sd:any_to_binary([Namespace, "KEY:", Pattern]) || Pattern <- patterns([D, T, S, I], G, 0, [])],
+	{ok, Browse?REDIS_SD_BROWSE{channels=Channels}}.
 
 %%%-------------------------------------------------------------------
 %%% Internal functions

@@ -2,11 +2,11 @@
 %% vim: ts=4 sw=4 ft=erlang noet
 %%%-------------------------------------------------------------------
 %%% @author Andrew Bennett <andrew@pagodabox.com>
-%%% @copyright 2013, Pagoda Box, Inc.
+%%% @copyright 2014, Pagoda Box, Inc.
 %%% @doc
 %%%
 %%% @end
-%%% Created :  02 Sep 2013 by Andrew Bennett <andrew@pagodabox.com>
+%%% Created :  30 Aug 2013 by Andrew Bennett <andrew@pagodabox.com>
 %%%-------------------------------------------------------------------
 -module(redis_sd_client_browse).
 -behaviour(gen_server).
@@ -14,281 +14,250 @@
 -include("redis_sd_client.hrl").
 
 %% API
--export([start_link/1, parse/2]).
+-export([start_link/1, enable/1, disable/1, graceful_shutdown/1]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
 	terminate/2, code_change/3]).
-
--record(parser, {
-	browse     = undefined  :: undefined | #browse{},
-	browser    = undefined  :: undefined | module(),
-	state      = undefined  :: undefined | any(),
-	discovered = dict:new() :: dict()
-}).
 
 %%%===================================================================
 %%% API functions
 %%%===================================================================
 
 %% @private
-start_link(Browse=#browse{name=Name}) ->
-	gen_server:start_link({local, Name}, ?MODULE, Browse, []).
+start_link(Browse=?REDIS_SD_BROWSE{ref=Ref}) ->
+	gen_server:start_link({via, redis_sd_client, {pid, Ref}}, ?MODULE, Browse, []).
 
-parse(#browse{name=Name}, KeyVals) ->
-	gen_server:cast(Name, {parse, KeyVals}).
+%% @doc Enable announcing of the service.
+enable(Ref) ->
+	gen_server:cast({via, redis_sd_client, {pid, Ref}}, enable).
+
+%% @doc Disable announcing of the service.
+disable(Ref) ->
+	gen_server:cast({via, redis_sd_client, {pid, Ref}}, disable).
+
+%% @doc Gracefully shutdown the service.
+graceful_shutdown(Ref) ->
+	gen_server:call({via, redis_sd_client, {pid, Ref}}, graceful_shutdown).
 
 %%%===================================================================
 %%% gen_server callbacks
 %%%===================================================================
 
 %% @private
-init(Browse=#browse{browser=Browser, browser_opts=BrowserOpts}) ->
-	Parser = #parser{browse=Browse, browser=Browser},
-	{ok, Parser2} = browser_init(BrowserOpts, Parser),
-	timer:send_interval(1000, '$redis_sd_tick'),
-	{ok, Parser2}.
+init(Browse=?REDIS_SD_BROWSE{enabled=Enabled, min_wait=MinWait, max_wait=MaxWait}) ->
+	case redis_sd_client_pattern:refresh(Browse) of
+		{ok, Browse2} ->
+			true = redis_sd_client:set_enabled(Browse2?REDIS_SD_BROWSE.ref, Enabled),
+			redis_sd_client_event:browse_init(Browse2),
+			case Enabled of
+				false ->
+					redis_sd_client_event:browse_disable(Browse2);
+				true ->
+					redis_sd_client_event:browse_enable(Browse2)
+			end,
+			Backoff = backoff:init(timer:seconds(MinWait), timer:seconds(MaxWait), self(), connect),
+			BRef = start_connect(initial),
+			{ok, Browse2?REDIS_SD_BROWSE{backoff=Backoff, bref=BRef}};
+		RefreshError ->
+			{stop, RefreshError}
+	end.
 
 %% @private
-handle_call(_Request, _From, Parser) ->
-	Reply = ok,
-	{reply, Reply, Parser}.
+handle_call(graceful_shutdown, _From, Browse) ->
+	{stop, normal, ok, Browse};
+handle_call(Request, From, Browse) ->
+	error_logger:warning_msg(
+		"** ~p ~p unhandled request from ~p in ~p/~p~n"
+		"   Request was: ~p~n",
+		[?MODULE, self(), From, handle_call, 3, Request]),
+	{reply, ignore, Browse}.
 
 %% @private
-handle_cast({parse, KeyVals}, Parser) ->
-	handle_parse(KeyVals, Parser);
-handle_cast({service_remove, Record}, Parser=#parser{browse=Browse}) ->
-	{ok, Parser2} = browser_service_remove(Record, Parser),
-	redis_sd_client_event:service_remove(Record, Browse),
-	{noreply, Parser2};
-handle_cast(Request, Parser) ->
-	error_logger:error_msg(
+handle_cast(enable, Browse=?REDIS_SD_BROWSE{enabled=false, ref=Ref, redis_sub=Subscriber}) ->
+	true = redis_sd_client:set_enabled(Ref, true),
+	Browse2 = case Subscriber of
+		undefined ->
+			Browse?REDIS_SD_BROWSE{enabled=true};
+		_ ->
+			start_sync(Browse?REDIS_SD_BROWSE{enabled=true})
+	end,
+	{noreply, Browse2};
+handle_cast(enable, Browse=?REDIS_SD_BROWSE{enabled=true}) ->
+	{noreply, Browse};
+handle_cast(disable, Browse=?REDIS_SD_BROWSE{enabled=true, ref=Ref}) ->
+	true = redis_sd_client:set_enabled(Ref, false),
+	{noreply, Browse?REDIS_SD_BROWSE{enabled=false}};
+handle_cast(disable, Browse=?REDIS_SD_BROWSE{enabled=false}) ->
+	{noreply, Browse};
+handle_cast(Request, Browse) ->
+	error_logger:warning_msg(
 		"** ~p ~p unhandled request in ~p/~p~n"
 		"   Request was: ~p~n",
 		[?MODULE, self(), handle_cast, 2, Request]),
-	{noreply, Parser}.
+	{noreply, Browse}.
 
 %% @private
-handle_info('$redis_sd_tick', Parser=#parser{discovered=Discovered, browse=Browse}) ->
-	Discovered2 = dict:fold(fun({Domain, Type, Service, Instance}, Record=#dns_sd{ttl=TTL}, D) ->
-		case TTL - 1 of
-			TTL2 when TTL2 =< 0 ->
-				ok = gen_server:cast(Browse#browse.name, {service_remove, Record#dns_sd{ttl=TTL2}}),
-				D;
-			TTL2 ->
-				dict:store({Domain, Type, Service, Instance}, Record#dns_sd{ttl=TTL2}, D)
-		end
-	end, dict:new(), Discovered),
-	{noreply, Parser#parser{discovered=Discovered2}};
-handle_info({'$redis_sd_browser_call', From, Request}, Parser) ->
-	{ok, Parser2} = browser_call(Request, From, Parser),
-	{noreply, Parser2};
-handle_info(Info, Parser) ->
-	{ok, Parser2} = browser_info(Info, Parser),
-	{noreply, Parser2}.
+handle_info({timeout, BRef, connect}, Browse=?REDIS_SD_BROWSE{bref=BRef}) ->
+	connect(Browse?REDIS_SD_BROWSE{bref=undefined});
+handle_info({redis_message, Subscriber, [<<"psubscribe">>, Channel | _]}, Browse=?REDIS_SD_BROWSE{enabled=true, redis_sub=Subscriber}) ->
+	redis_sd_client_event:browse_subscribe(Channel, Browse),
+	Browse2 = start_sync(Browse),
+	{noreply, Browse2};
+handle_info({redis_message, Subscriber, [<<"psubscribe">>, Channel | _]}, Browse=?REDIS_SD_BROWSE{redis_sub=Subscriber}) ->
+	redis_sd_client_event:browse_subscribe(Channel, Browse),
+	{noreply, Browse};
+handle_info({redis_message, Subscriber, [<<"pmessage">>, _Channel, Key, Message]}, Browse=?REDIS_SD_BROWSE{enabled=true, redis_sub=Subscriber}) ->
+	case catch redis_sd_dns:from_binary(Message) of
+		Record=?REDIS_SD_DNS{} ->
+			ok = redis_sd_client_browse_state:add(Browse?REDIS_SD_BROWSE.ref, Key, Record),
+			{noreply, Browse};
+		_ ->
+			{noreply, Browse}
+	end;
+handle_info({redis_message, Subscriber, [<<"pmessage">>, _Channel, _Key, _Message]}, Browse=?REDIS_SD_BROWSE{redis_sub=Subscriber}) ->
+	{noreply, Browse};
+handle_info({redis_error, Subscriber, {Error, Reason}}, Browse=?REDIS_SD_BROWSE{redis_sub=Subscriber, ref=Ref}) ->
+	error_logger:warning_msg(
+		"** ~p ~p received redis_error in ~p/~p~n"
+		"   for the reason ~p:~p~n",
+		[?MODULE, Ref, handle_info, 3, Error, Reason]),
+	{noreply, Browse};
+handle_info({redis_closed, Subscriber}, Browse=?REDIS_SD_BROWSE{redis_sub=Subscriber}) ->
+	ok = hierdis_async:close(Subscriber),
+	connect(Browse?REDIS_SD_BROWSE{redis_sub=undefined});
+handle_info({'DOWN', SyncRef, process, SyncPid, _}, Browse=?REDIS_SD_BROWSE{sync={SyncPid, SyncRef}}) ->
+	{noreply, Browse?REDIS_SD_BROWSE{sync=undefined}};
+handle_info(Info, Browse=?REDIS_SD_BROWSE{ref=Ref}) ->
+	error_logger:error_msg(
+		"** ~p ~p unhandled info in ~p/~p~n"
+		"   Info was: ~p~n",
+		[?MODULE, Ref, handle_info, 3, Info]),
+	{noreply, Browse}.
 
 %% @private
-terminate(Reason, Parser) ->
-	browser_terminate(Reason, Parser).
-
-%% @private
-code_change(_OldVsn, Parser, _Extra) ->
-	{ok, Parser}.
-
-%%%-------------------------------------------------------------------
-%%% Browser functions
-%%%-------------------------------------------------------------------
-
-%% @private
-browser_init(_BrowserOpts, Parser=#parser{browser=undefined}) ->
-	{ok, Parser};
-browser_init(BrowserOpts, Parser=#parser{browser=Browser, browse=Browse}) ->
-	case Browser:browser_init(Browse, BrowserOpts) of
-		{ok, State} ->
-			{ok, Parser#parser{state=State}}
-	end.
-
-%% @private
-browser_service_add(_Record, Parser=#parser{browser=undefined}) ->
-	{ok, Parser};
-browser_service_add(Record, Parser=#parser{browser=Browser, state=State}) ->
-	case Browser:browser_service_add(Record, State) of
-		{ok, State2} ->
-			{ok, Parser#parser{state=State2}}
-	end.
-
-%% @private
-browser_service_remove(_Record, Parser=#parser{browser=undefined}) ->
-	{ok, Parser};
-browser_service_remove(Record, Parser=#parser{browser=Browser, state=State}) ->
-	case Browser:browser_service_remove(Record, State) of
-		{ok, State2} ->
-			{ok, Parser#parser{state=State2}}
-	end.
-
-%% @private
-browser_call(_Request, From, Parser=#parser{browser=undefined}) ->
-	_ = redis_sd_browser:reply(From, {error, no_browser_defined}),
-	{ok, Parser};
-browser_call(Request, From, Parser=#parser{browser=Browser, state=State}) ->
-	case Browser:browser_call(Request, From, State) of
-		{noreply, State2} ->
-			{ok, Parser#parser{state=State2}};
-		{reply, Reply, State2} ->
-			_ = redis_sd_browser:reply(From, Reply),
-			{ok, Parser#parser{state=State2}}
-	end.
-
-%% @private
-browser_info(_Info, Parser=#parser{browser=undefined}) ->
-	{ok, Parser};
-browser_info(Info, Parser=#parser{browser=Browser, state=State}) ->
-	case Browser:browser_info(Info, State) of
-		{ok, State2} ->
-			{ok, Parser#parser{state=State2}}
-	end.
-
-%% @private
-browser_terminate(_Reason, #parser{browser=undefined}) ->
-	ok;
-browser_terminate(Reason, #parser{browser=Browser, state=State}) ->
-	_ = Browser:browser_terminate(Reason, State),
+terminate(Reason, Browse=?REDIS_SD_BROWSE{redis_sub=Subscriber}) ->
+	case Subscriber of
+		undefined ->
+			ok;
+		_ ->
+			catch hierdis_async:close(Subscriber)
+	end,
+	redis_sd_client_event:browse_terminate(Reason, Browse?REDIS_SD_BROWSE{redis_sub=undefined}),
 	ok.
+
+%% @private
+code_change(_OldVsn, Browse, _Extra) ->
+	{ok, Browse}.
+
+%%%===================================================================
+%%% States
+%%%===================================================================
+
+%% @private
+connect(Browse=?REDIS_SD_BROWSE{redis_opts={Transport, Args}, backoff=Backoff}) ->
+	ConnectFun = case Transport of
+		tcp ->
+			connect;
+		unix ->
+			connect_unix
+	end,
+	case erlang:apply(hierdis_async, ConnectFun, Args) of
+		{ok, Subscriber} ->
+			authorize(Browse?REDIS_SD_BROWSE{redis_sub=Subscriber});
+		{error, _ConnectError} ->
+			BRef = start_connect(Browse),
+			{_Delay, Backoff2} = backoff:fail(Backoff),
+			{noreply, Browse?REDIS_SD_BROWSE{backoff=Backoff2, bref=BRef}}
+	end.
+
+%% @private
+authorize(Browse=?REDIS_SD_BROWSE{redis_auth=undefined}) ->
+	subscribe(Browse);
+authorize(Browse=?REDIS_SD_BROWSE{redis_auth=Password, backoff=Backoff}) when Password =/= undefined ->
+	case redis_auth(Password, Browse) of
+		ok ->
+			subscribe(Browse);
+		{error, AuthError} ->
+			error_logger:warning_msg("[~p] Redis auth error: ~p", [AuthError]),
+			BRef = start_connect(Browse),
+			{_Delay, Backoff2} = backoff:fail(Backoff),
+			{noreply, Browse?REDIS_SD_BROWSE{backoff=Backoff2, bref=BRef}}
+	end.
+
+%% @private
+subscribe(Browse=?REDIS_SD_BROWSE{channels=Channels, backoff=Backoff}) ->
+	case redis_psubscribe(Channels, Browse) of
+		ok ->
+			redis_sd_client_event:browse_connect(Browse),
+			{_Start, Backoff2} = backoff:succeed(Backoff),
+			{noreply, Browse?REDIS_SD_BROWSE{backoff=Backoff2}};
+		{error, SubscribeError} ->
+			error_logger:warning_msg("[~p] Redis subscribe error: ~p", [?MODULE, SubscribeError]),
+			BRef = start_connect(Browse),
+			{_Delay, Backoff2} = backoff:fail(Backoff),
+			{noreply, Browse?REDIS_SD_BROWSE{backoff=Backoff2, bref=BRef}}
+	end.
 
 %%%-------------------------------------------------------------------
 %%% Internal functions
 %%%-------------------------------------------------------------------
 
 %% @private
-handle_parse([], Parser) ->
-	{noreply, Parser};
-handle_parse([{Key0, Val, TTL} | KeyVals], Parser=#parser{browse=#browse{redis_ns=Namespace0}}) ->
-	Namespace = iolist_to_binary(Namespace0),
-	NamespaceLen = byte_size(Namespace),
-	case Key0 of
-		<< Namespace:NamespaceLen/binary, "KEY:", Key/binary >> ->
-			{Header, Type, Questions, Answers, Authorities, Resources} = parse_record(Val),
-			QR = proplists:get_value(qr, Header),
-			Opcode = proplists:get_value(opcode, Header),
-			Data = {Questions, Answers, Authorities, Resources},
-			case handle_record(Key, Header, Type, QR, Opcode, Data, TTL, Parser) of
-				{ok, Parser2} ->
-					handle_parse(KeyVals, Parser2);
-				{stop, Reason, Parser2} ->
-					{stop, Reason, Parser2}
-			end;
-		_ ->
-			handle_parse(KeyVals, Parser)
-	end.
-
-%% @private
-parse_record(Record) ->
-	Header = inet_dns:header(inet_dns:msg(Record, header)),
-	Type = inet_dns:record_type(Record),
-	Questions = [inet_dns:dns_query(Query) || Query <- inet_dns:msg(Record, qdlist)],
-	Answers = [inet_dns:rr(RR) || RR <- inet_dns:msg(Record, anlist)],
-	Authorities = [inet_dns:rr(RR) || RR <- inet_dns:msg(Record, nslist)],
-	Resources = [inet_dns:rr(RR) || RR <- inet_dns:msg(Record, arlist)],
-	{Header, Type, Questions, Answers, Authorities, Resources}.
-
-%% @private
-handle_record(Key, _Header, msg, true, 'query', {[], Answers, [], Resources}, TTL, Parser) ->
-	handle_advertisement(Answers, Resources, Key, TTL, Parser);
-handle_record(_Key, _Header, _Type, _QR, _Opcode, _Data, _TTL, Parser) ->
-	{ok, Parser}.
-
-%% @private
-handle_advertisement([], _Resources, _Key, _TTL, Parser) ->
-	{ok, Parser};
-handle_advertisement([Answer | Answers], Resources, Key, TTL, Parser=#parser{discovered=Discovered, browse=Browse}) ->
-	AnswerData = data(Answer),
-	AnswerDomain = domain(Answer),
-	ResourceTypes = [{type(Resource), data(Resource)} || Resource <- Resources, domain(Resource) =:= AnswerData],
-	AnswerTTL = ttl(Answer, TTL),
-	R = {iolist_to_binary(AnswerData), iolist_to_binary(AnswerDomain), Key, ResourceTypes},
-	S = #dns_sd{ttl=AnswerTTL},
-	case handle_answer(R, S) of
-		{add, S2=#dns_sd{domain=Domain, type=Type, service=Service, instance=Instance}} ->
-			Discovered2 = dict:store({Domain, Type, Service, Instance}, S2, Discovered),
-			{ok, Parser2} = browser_service_add(S2, Parser#parser{discovered=Discovered2}),
-			redis_sd_client_event:service_add(S2, Browse),
-			handle_advertisement(Answers, Resources, Key, TTL, Parser2);
-		{remove, S2=#dns_sd{domain=Domain, type=Type, service=Service, instance=Instance}} ->
-			Discovered2 = dict:erase({Domain, Type, Service, Instance}, Discovered),
-			{ok, Parser2} = browser_service_remove(S2, Parser#parser{discovered=Discovered2}),
-			redis_sd_client_event:service_remove(S2, Browse),
-			handle_advertisement(Answers, Resources, Key, TTL, Parser2);
-		ignore ->
-			handle_advertisement(Answers, Resources, Key, TTL, Parser)
-	end.
-
-%% @private
-handle_answer({SRV, PTR, KEY, Resources}, S=#dns_sd{priority=undefined, weight=undefined, port=undefined, target=undefined, txtdata=undefined}) ->
-	case get_value(txt, Resources) of
-		undefined ->
-			ignore;
-		TXT ->
-			case get_value(srv, Resources) of
-				undefined ->
-					ignore;
-				{Priority, Weight, Port, TargetString} ->
-					Target = iolist_to_binary(TargetString),
-					TXTData = parse_txt(TXT, []),
-					handle_answer({SRV, PTR, KEY}, S#dns_sd{priority=Priority, weight=Weight, port=Port, target=Target, txtdata=TXTData})
-			end
-	end;
-handle_answer({SRV, PTR, KEY}, S=#dns_sd{domain=undefined, type=undefined, service=undefined, instance=undefined, ttl=TTL}) ->
-	Keys = [{ptr, PTR}, {srv, SRV}, {key, KEY}],
-	try redis_sd:keys_to_labels(Keys) of
-		{Domain, Type, Service, Instance} ->
-			handle_answer(TTL, S#dns_sd{domain=Domain, type=Type, service=Service, instance=Instance})
+redis_auth(Password, ?REDIS_SD_BROWSE{redis_sub=Subscriber, cmd_auth=AUTH}) ->
+	Command = [AUTH, Password],
+	try hierdis_async:command(Subscriber, Command) of
+		{ok, _} ->
+			ok;
+		{error, Reason} ->
+			{error, Reason}
 	catch
-		_:_ ->
-			ignore
-	end;
-handle_answer(TTL, S) when is_integer(TTL) andalso TTL =< 0 ->
-	{remove, S};
-handle_answer(TTL, S) when is_integer(TTL) ->
-	{add, S}.
-
-
-%% @private
-get_value(Key, Opts) ->
-	get_value(Key, Opts, undefined).
-
-%% @doc Faster alternative to proplists:get_value/3.
-%% @private
-get_value(Key, Opts, Default) ->
-	case lists:keyfind(Key, 1, Opts) of
-		{_, Value} -> Value;
-		_ -> Default
+		Class:Reason ->
+			error_logger:error_msg(
+				"** ~p ~p terminating in ~p/~p~n"
+				"   for the reason ~p:~p~n** Stacktrace: ~p~n~n",
+				[?MODULE, self(), redis_auth, 2, Class, Reason, erlang:get_stacktrace()]),
+			erlang:error(Reason)
 	end.
 
 %% @private
-domain(Resource) ->
-	get_value(domain, Resource).
-
-%% @private
-type(Resource) ->
-	get_value(type, Resource).
-
-%% @private
-data(Resource) ->
-	get_value(data, Resource).
-
-%% @private
-ttl(_Resource, TTL) when is_integer(TTL) ->
-	TTL;
-ttl(Resource, undefined) ->
-	get_value(ttl, Resource).
-
-%% @private
-parse_txt([], Acc) ->
-	lists:reverse(Acc);
-parse_txt([TXT | TXTs], Acc) ->
-	case binary:split(iolist_to_binary(TXT), <<"=">>) of
-		[Key, Val] ->
-			parse_txt(TXTs, [{redis_sd:urldecode(Key), redis_sd:urldecode(Val)} | Acc]);
-		_ ->
-			parse_txt(TXTs, Acc)
+redis_psubscribe(Channels, ?REDIS_SD_BROWSE{redis_sub=Subscriber, cmd_psubscribe=PSUBSCRIBE}) ->
+	Command = [PSUBSCRIBE | Channels],
+	try hierdis_async:append_command(Subscriber, Command) of
+		{ok, _} ->
+			ok;
+		{error, Reason} ->
+			{error, Reason}
+	catch
+		Class:Reason ->
+			error_logger:error_msg(
+				"** ~p ~p terminating in ~p/~p~n"
+				"   for the reason ~p:~p~n** Stacktrace: ~p~n~n",
+				[?MODULE, self(), redis_psubscribe, 2, Class, Reason, erlang:get_stacktrace()]),
+			erlang:error(Reason)
 	end.
+
+%% @private
+start_connect(initial) ->
+	start_connect(0);
+start_connect(Browse=?REDIS_SD_BROWSE{backoff=Backoff}) ->
+	ok = stop_connect(Browse),
+	Result = backoff:fire(Backoff),
+	Result;
+start_connect(N) when is_integer(N) ->
+	erlang:start_timer(N, self(), connect).
+
+%% @private
+stop_connect(?REDIS_SD_BROWSE{bref=undefined}) ->
+	ok;
+stop_connect(?REDIS_SD_BROWSE{bref=BRef}) when is_reference(BRef) ->
+	catch erlang:cancel_timer(BRef),
+	ok.
+
+%% @private
+start_sync(Browse=?REDIS_SD_BROWSE{sync=undefined}) ->
+	{ok, SyncPid} = redis_sd_client_browse_sup:start_sync(Browse),
+	SyncRef = erlang:monitor(process, SyncPid),
+	Browse?REDIS_SD_BROWSE{sync={SyncPid, SyncRef}};
+start_sync(Browse=?REDIS_SD_BROWSE{}) ->
+	Browse.

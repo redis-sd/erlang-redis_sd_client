@@ -2,28 +2,28 @@
 %% vim: ts=4 sw=4 ft=erlang noet
 %%%-------------------------------------------------------------------
 %%% @author Andrew Bennett <andrew@pagodabox.com>
-%%% @copyright 2013, Pagoda Box, Inc.
+%%% @copyright 2014, Pagoda Box, Inc.
 %%% @doc
 %%%
 %%% @end
 %%% Created :  30 Aug 2013 by Andrew Bennett <andrew@pagodabox.com>
 %%%-------------------------------------------------------------------
 
+-ifndef(REDIS_SD_CLIENT_HRL).
+
 -include_lib("redis_sd_spec/include/redis_sd.hrl").
 
--type browse_pattern() :: string() | [string() | '*' | '?' | atom()].
+-type redis_sd_browse_pattern() :: iodata() | [iodata() | '*' | '?' | atom()].
 
--record(browse, {
-	name     = undefined :: undefined | atom(),
-	domain   = undefined :: undefined | browse_pattern(),
-	type     = undefined :: undefined | browse_pattern(),
-	service  = undefined :: undefined | browse_pattern(),
-	instance = undefined :: undefined | browse_pattern(),
+-record(redis_sd_browse_v1, {
+	enabled = true :: boolean(),
+
+	ref      = undefined :: undefined | integer(),
+	domain   = undefined :: undefined | redis_sd_browse_pattern(),
+	type     = undefined :: undefined | redis_sd_browse_pattern(),
+	service  = undefined :: undefined | redis_sd_browse_pattern(),
+	instance = undefined :: undefined | redis_sd_browse_pattern(),
 	greedy   = true      :: boolean(),
-
-	%% Browser Options
-	browser      = undefined :: undefined | module(),
-	browser_opts = undefined :: undefined | any(),
 
 	%% Redis Options
 	redis_opts = {tcp, ["127.0.0.1", 6379]} :: {tcp | unix, [string() | integer() | timeout()]},
@@ -45,11 +45,17 @@
 	max_wait = 120       :: integer(), % seconds
 	backoff  = undefined :: undefined | backoff:backoff(),
 	bref     = undefined :: undefined | reference(),
-	aref     = undefined :: undefined | reference(),
-	sref     = undefined :: undefined | reference(),
-	reader   = undefined :: undefined | atom(),
 	sync     = undefined :: undefined | {pid(), reference()},
+	table    = undefined :: undefined | ets:tid(),
 
 	%% Pattern Cache
 	channels = undefined :: undefined | [binary()]
 }).
+
+-type redis_sd_browse() :: #redis_sd_browse_v1{}.
+
+-define(REDIS_SD_BROWSE, #redis_sd_browse_v1).
+
+-define(REDIS_SD_CLIENT_HRL, 1).
+
+-endif.
