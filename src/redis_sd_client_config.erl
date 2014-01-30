@@ -13,7 +13,7 @@
 -include("redis_sd_client.hrl").
 
 %% API
--export([list_to_browse/1]).
+-export([list_to_browse/1, list_to_browse/2]).
 
 %% Internal
 -export([opt/2, opt/3, req/2]).
@@ -23,10 +23,30 @@
 %%% API functions
 %%%===================================================================
 
--spec list_to_browse([{atom(), term()}]) -> ?REDIS_SD_BROWSE{}.
-list_to_browse(B) ->
+-spec list_to_browse([{atom(), term()}]) -> redis_sd_browse().
+list_to_browse(BrowseConfig) ->
+	list_to_browse([], BrowseConfig).
+
+-spec list_to_browse([module()], [{atom(), term()}]) -> redis_sd_browse().
+list_to_browse(Apps, BrowseConfig) when is_list(Apps) ->
 	Default = ?REDIS_SD_BROWSE{},
-	Enabled = opt(enabled, B, Default?REDIS_SD_BROWSE.enabled),
+	Defaults = [
+		{enabled, Default?REDIS_SD_BROWSE.enabled, app},
+		{greedy, Default?REDIS_SD_BROWSE.greedy, app},
+		{redis_opts, Default?REDIS_SD_BROWSE.redis_opts, app},
+		{redis_auth, Default?REDIS_SD_BROWSE.redis_auth, app},
+		{redis_ns, Default?REDIS_SD_BROWSE.redis_ns, app},
+		{cmd_auth, Default?REDIS_SD_BROWSE.cmd_auth, app},
+		{cmd_keys, Default?REDIS_SD_BROWSE.cmd_keys, app},
+		{cmd_mget, Default?REDIS_SD_BROWSE.cmd_mget, app},
+		{cmd_psubscribe, Default?REDIS_SD_BROWSE.cmd_psubscribe, app},
+		{cmd_punsubscribe, Default?REDIS_SD_BROWSE.cmd_punsubscribe, app},
+		{cmd_ttl, Default?REDIS_SD_BROWSE.cmd_ttl, app},
+		{min_wait, Default?REDIS_SD_BROWSE.min_wait, app},
+		{max_wait, Default?REDIS_SD_BROWSE.max_wait, app}
+	],
+	B = redis_sd_config:merge(Apps ++ [redis_sd_client], Defaults, BrowseConfig),
+	Enabled = req(enabled, B),
 	case Enabled of
 		false ->
 			ok;
@@ -42,24 +62,24 @@ list_to_browse(B) ->
 		type     = opt(type, B, Default?REDIS_SD_BROWSE.type),
 		service  = opt(service, B, Default?REDIS_SD_BROWSE.service),
 		instance = opt(instance, B, Default?REDIS_SD_BROWSE.instance),
-		greedy   = opt(greedy, B, Default?REDIS_SD_BROWSE.greedy),
+		greedy   = req(greedy, B),
 
 		%% Redis Options
-		redis_opts = opt(redis_opts, B, Default?REDIS_SD_BROWSE.redis_opts),
-		redis_auth = opt(redis_auth, B, Default?REDIS_SD_BROWSE.redis_auth),
-		redis_ns   = opt(redis_ns, B, Default?REDIS_SD_BROWSE.redis_ns),
+		redis_opts = req(redis_opts, B),
+		redis_auth = req(redis_auth, B),
+		redis_ns   = req(redis_ns, B),
 
 		%% Redis Commands
-		cmd_auth         = opt(cmd_auth, B, Default?REDIS_SD_BROWSE.cmd_auth),
-		cmd_keys         = opt(cmd_keys, B, Default?REDIS_SD_BROWSE.cmd_keys),
-		cmd_mget         = opt(cmd_mget, B, Default?REDIS_SD_BROWSE.cmd_mget),
-		cmd_psubscribe   = opt(cmd_psubscribe, B, Default?REDIS_SD_BROWSE.cmd_psubscribe),
-		cmd_punsubscribe = opt(cmd_punsubscribe, B, Default?REDIS_SD_BROWSE.cmd_punsubscribe),
-		cmd_ttl          = opt(cmd_ttl, B, Default?REDIS_SD_BROWSE.cmd_ttl),
+		cmd_auth         = req(cmd_auth, B),
+		cmd_keys         = req(cmd_keys, B),
+		cmd_mget         = req(cmd_mget, B),
+		cmd_psubscribe   = req(cmd_psubscribe, B),
+		cmd_punsubscribe = req(cmd_punsubscribe, B),
+		cmd_ttl          = req(cmd_ttl, B),
 
 		%% Reconnect Options
-		min_wait = opt(min_wait, B, Default?REDIS_SD_BROWSE.min_wait),
-		max_wait = opt(max_wait, B, Default?REDIS_SD_BROWSE.max_wait)
+		min_wait = req(min_wait, B),
+		max_wait = req(max_wait, B)
 	},
 	B1?REDIS_SD_BROWSE{ref=erlang:phash2(B1)}.
 

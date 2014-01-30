@@ -31,9 +31,10 @@ start_link() ->
 
 %% @doc Create a new browse from proplist browse config `BrowseConfig'. The
 %% public API for this functionality is {@link redis_sd_client:new_browse/1}.
-new_browse(BrowseConfig) ->
-	NewBrowse = redis_sd_client_config:list_to_browse(BrowseConfig),
-	Spec = browse_sup_spec(NewBrowse),
+new_browse(BrowseConfig) when is_list(BrowseConfig) ->
+	new_browse(redis_sd_client_config:list_to_browse(BrowseConfig));
+new_browse(Browse=?REDIS_SD_BROWSE{}) ->
+	Spec = browse_sup_spec(Browse),
 	supervisor:start_child(?MODULE, Spec).
 
 %% @doc Gracefully shutdown the named browse.

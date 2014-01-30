@@ -42,6 +42,7 @@
 -spec manual_start() -> ok.
 manual_start() ->
 	redis_sd:require([
+		backoff,
 		hierdis,
 		redis_sd_spec,
 		redis_sd_client
