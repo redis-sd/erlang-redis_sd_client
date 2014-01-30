@@ -203,25 +203,9 @@ handle_cast(_Request, State) ->
 	{noreply, State}.
 
 %% @private
-% handle_info({'$redis_sd', {browse, terminate, normal, ?REDIS_SD_BROWSE{ref=Ref}}}, State) ->
-% 	ok = redis_sd_client:delete_browse(Ref),
-% 	{noreply, State};
-% handle_info({'$redis_sd', _Event}, State) ->
-% 	{noreply, State};
-% handle_info({'$redis_sd', {browse, terminate, normal, #browse{name=Name}}}, State) ->
-% 	ok = redis_sd_client:delete_browse(Name),
-% 	ets:match_delete(?TAB, {{{browse, Name}, '_'}, '_'}),
-% 	{noreply, State};
-% handle_info({'$redis_sd', {service, add, DNSSD, #browse{name=Name}}}, State) ->
-% 	Key = redis_sd:obj_key(DNSSD),
-% 	Val = redis_sd:obj_val(DNSSD),
-% 	Object = {{{browse, Name}, Key}, Val},
-% 	ets:insert(?TAB, Object),
-% 	{noreply, State};
-% handle_info({'$redis_sd', {service, remove, DNSSD, #browse{name=Name}}}, State) ->
-% 	Key = redis_sd:obj_key(DNSSD),
-% 	ets:delete(?TAB, {{browse, Name}, Key}),
-% 	{noreply, State};
+handle_info({'$redis_sd', {browse, terminate, normal, ?REDIS_SD_BROWSE{ref=Ref}}}, State) ->
+	ok = redis_sd_client:delete_browse(Ref),
+	{noreply, State};
 handle_info({'$redis_sd', {record, add, Key, Record, _Browse=?REDIS_SD_BROWSE{ref=Ref}}}, State) ->
 	true = ets:insert(?TAB, {{record, Ref, Key}, Record}),
 	{noreply, State};
@@ -229,8 +213,20 @@ handle_info({'$redis_sd', {record, expire, Key, _Record, _Browse=?REDIS_SD_BROWS
 	true = ets:delete(?TAB, {record, Ref, Key}),
 	{noreply, State};
 handle_info({'$redis_sd', _Event}, State) ->
-	io:format("EVENT: ~p~n", [_Event]),
 	{noreply, State};
+handle_info({'DOWN', MonitorRef, process, Pid, _Reason}, State=#state{monitors=Monitors}) ->
+	case lists:keytake({MonitorRef, Pid}, 1, Monitors) of
+		{value, {{MonitorRef, Pid}, {pid, Ref}}, Monitors2} ->
+			true = ets:delete(?TAB, {pid, Ref}),
+			true = ets:delete(?TAB, {enabled, Ref}),
+			true = ets:match_delete(?TAB, {{record, Ref, '_'}, '_'}),
+			{noreply, State#state{monitors=Monitors2}};
+		{value, {{MonitorRef, Pid}, {state_pid, Ref}}, Monitors2} ->
+			true = ets:delete(?TAB, {state_pid, Ref}),
+			{noreply, State#state{monitors=Monitors2}};
+		false ->
+			{noreply, State}
+	end;
 handle_info(Info, State) ->
 	error_logger:error_msg(
 		"** ~p ~p unhandled info in ~p/~p~n"
